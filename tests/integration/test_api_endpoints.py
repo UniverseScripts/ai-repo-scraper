@@ -76,23 +76,31 @@ async def test_lemon_squeezy_webhook_subscription(mock_client_class, async_clien
     args, kwargs = mock_post.call_args
     assert args[0] == "https://api.resend.com/emails"
     assert kwargs["json"]["to"] == ["b2b_subscriber@enterprise.com"]
+    # Sender comes from configuration, never a hardcoded placeholder. The literal
+    # "onboarding@yourdomain.com" would be rejected by Resend as an unverified domain.
+    assert kwargs["json"]["from"] == "keys@mock-agentrisk.test"
 
 @pytest.mark.asyncio
 @patch('api.main.httpx.AsyncClient')
-async def test_webhook_resend_failure_returns_false(mock_client_class, async_client):
+async def test_webhook_resend_failure_returns_500(mock_client_class, async_client, async_session):
+    """
+    A failed key dispatch must NOT return 2xx. Lemon Squeezy treats 2xx as delivered
+    and never retries, which is precisely how a paying customer ends up with nothing.
+    The key row must still be persisted so the retry converges on the same credential.
+    """
     import hmac
     import hashlib
     import json
-    
+
     mock_instance = AsyncMock()
     mock_client_class.return_value.__aenter__.return_value = mock_instance
     mock_post = mock_instance.post
-    
+
     def raise_err():
         raise Exception("Resend API down")
-        
+
     mock_post.return_value.raise_for_status = raise_err
-    
+
     secret = "mock_secret"
     payload = {
         "meta": {"event_name": "subscription_created"},
@@ -100,16 +108,69 @@ async def test_webhook_resend_failure_returns_false(mock_client_class, async_cli
     }
     raw_body = json.dumps(payload).encode("utf-8")
     signature = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    
+
     response = await async_client.post(
         "/webhooks/lemon-squeezy",
         content=raw_body,
         headers={"X-Signature": signature, "Content-Type": "application/json"}
     )
-    
-    assert response.status_code == status.HTTP_200_OK
-    assert response.json()["provisioned"] is True
-    assert response.json()["key_dispatched"] is False
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert "delivery failed" in response.json()["detail"]
+
+    # The key must still be persisted, so the retry is idempotent rather than re-minting.
+    res = await async_session.execute(select(APIKey).where(APIKey.subscription_id == "sub_456"))
+    assert res.scalars().first() is not None
+
+
+@pytest.mark.asyncio
+@patch('api.main.httpx.AsyncClient')
+async def test_webhook_retry_is_idempotent(mock_client_class, async_client, async_session):
+    """
+    A retried subscription_created must converge on ONE row carrying the SAME key.
+    subscription_id is UNIQUE, so a blind insert would fail the constraint on retry;
+    and only the SHA-256 digest is stored, so a randomly generated key could never
+    be re-sent. Hence deterministic derivation from the subscription id.
+    """
+    import hmac
+    import hashlib
+    import json
+
+    mock_instance = AsyncMock()
+    mock_client_class.return_value.__aenter__.return_value = mock_instance
+    mock_post = mock_instance.post
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.raise_for_status = lambda: None
+
+    secret = "mock_secret"
+    payload = {
+        "meta": {"event_name": "subscription_created"},
+        "data": {"id": "sub_retry", "attributes": {"user_email": "retry@enterprise.com", "variant_id": "mock_variant_id"}}
+    }
+    raw_body = json.dumps(payload).encode("utf-8")
+    signature = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    headers = {"X-Signature": signature, "Content-Type": "application/json"}
+
+    first = await async_client.post("/webhooks/lemon-squeezy", content=raw_body, headers=headers)
+    second = await async_client.post("/webhooks/lemon-squeezy", content=raw_body, headers=headers)
+
+    assert first.status_code == status.HTTP_200_OK
+    assert second.status_code == status.HTTP_200_OK
+
+    # Exactly one row for this subscription, not a duplicate or a constraint error.
+    res = await async_session.execute(select(APIKey).where(APIKey.subscription_id == "sub_retry"))
+    rows = res.scalars().all()
+    assert len(rows) == 1
+
+    # Both dispatches carried the identical raw key.
+    assert mock_post.call_count == 2
+    first_html = mock_post.call_args_list[0].kwargs["json"]["html"]
+    second_html = mock_post.call_args_list[1].kwargs["json"]["html"]
+    assert first_html == second_html
+
+    # And that delivered key actually authenticates against the stored hash.
+    delivered_key = first_html.split("<strong>")[1].split("</strong>")[0]
+    assert hashlib.sha256(delivered_key.encode("utf-8")).hexdigest() == rows[0].valid_api_keys
 
 
 @pytest.mark.asyncio

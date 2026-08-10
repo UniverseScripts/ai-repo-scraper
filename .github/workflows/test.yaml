@@ -1,0 +1,35 @@
+name: Test Suite
+
+# PROJECT_CONTEXT.pdf Section 8 requires the webhook key-delivery test to remain
+# covered "for the life of this project". That guarantee is only real if something
+# actually runs the suite — previously nothing did.
+
+on:
+    push:
+    pull_request:
+    workflow_dispatch:
+
+jobs:
+    pytest:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Python Setup
+              uses: actions/setup-python@v5
+              with:
+                    python-version: "3.12"
+                    cache: "pip"
+
+            - name: Install dep
+              run: |
+                  pip install -r requirements-dev.txt
+
+            # tests/conftest.py sets every required env var itself, so no repository
+            # secrets are needed here and the suite never touches live services.
+            - name: Running The Test Suite
+              env:
+                    PYTHONPATH: .
+              run: |
+                  pytest -v

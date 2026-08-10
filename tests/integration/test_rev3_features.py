@@ -3,7 +3,7 @@ import asyncio
 from fastapi import status
 from unittest.mock import patch, AsyncMock
 from db.models import PackageRiskMetric
-from api.service import RegistryNotFound, UntrackablePackage
+from api.service import RegistryNotFound, UntrackablePackage, UpstreamRateLimited
 
 @pytest.mark.asyncio
 async def test_history_route_registered_before_package_risk(async_client, async_session, valid_api_key):
@@ -118,3 +118,43 @@ async def test_on_demand_fetch_timeout_backpressure(async_client, valid_api_key)
     assert response.status_code == status.HTTP_504_GATEWAY_TIMEOUT
     data = response.json()
     assert "Resolution timeout" in data["detail"]
+
+@pytest.mark.asyncio
+async def test_missing_github_token_returns_503(async_client, valid_api_key, monkeypatch):
+    """
+    A missing server-side GitHub credential is OUR configuration fault, not evidence
+    that the customer's package is untrackable. This previously surfaced as a false
+    HTTP 404 claiming the package had no public GitHub repository.
+
+    Deliberately unmocked: the guard must fire before any network call is attempted.
+    """
+    raw_key, _ = valid_api_key
+    monkeypatch.setenv("GITHUB_TOKEN", "")
+
+    response = await async_client.get(
+        "/api/v1/package-risk/npm/some-unscanned-package",
+        headers={"X-API-Key": raw_key}
+    )
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert "credential not configured" in response.json()["detail"]
+
+@pytest.mark.asyncio
+async def test_github_rate_limited_returns_503(async_client, valid_api_key):
+    """
+    Budget exhaustion is transient and ours. It must not be reported as the package
+    being untrackable — different failure, different remedy, different HTTP class.
+    """
+    raw_key, _ = valid_api_key
+
+    with patch(
+        "api.main.resolve_and_fetch_package_metrics",
+        side_effect=UpstreamRateLimited("GitHub telemetry budget temporarily depleted. Retry shortly."),
+    ):
+        response = await async_client.get(
+            "/api/v1/package-risk/npm/some-unscanned-package",
+            headers={"X-API-Key": raw_key}
+        )
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert "budget" in response.json()["detail"].lower()

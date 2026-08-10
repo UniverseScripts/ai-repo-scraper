@@ -20,6 +20,16 @@ class UntrackablePackage(Exception):
     """Raised when a package exists in registry but has no linked public GitHub repository."""
     pass
 
+class UpstreamAuthUnavailable(Exception):
+    """Raised when our GitHub credential is absent. A server-side configuration
+    fault, not a statement about the package — must not surface as a 404."""
+    pass
+
+class UpstreamRateLimited(Exception):
+    """Raised when the GitHub GraphQL budget is depleted. Transient and ours,
+    not a statement about the package — must not surface as a 404."""
+    pass
+
 def extract_github_repo(url_val) -> str | None:
     """Helper to extract owner/repo string from various repository URL formats."""
     if not url_val:
@@ -55,9 +65,16 @@ async def resolve_and_fetch_package_metrics(package_name: str) -> PackageRiskMet
     if ecosystem not in ("npm", "pypi"):
         raise ValueError(f"Unsupported ecosystem '{ecosystem}'. Supported: npm, pypi.")
 
-    headers = {}
-    if settings.GITHUB_TOKEN:
-        headers["Authorization"] = f"Bearer {settings.GITHUB_TOKEN}"
+    # GitHub's GraphQL API requires authentication outright. Without a token every
+    # live fetch fails, and previously that was reported to the customer as an
+    # untrackable package — a false statement about their package.
+    if not settings.GITHUB_TOKEN:
+        raise UpstreamAuthUnavailable(
+            "GitHub telemetry unavailable: server credential not configured. "
+            "This is a service-side fault, not a property of the requested package."
+        )
+
+    headers = {"Authorization": f"Bearer {settings.GITHUB_TOKEN}"}
 
     since_dt = datetime.now(timezone.utc) - timedelta(days=1)
 
@@ -101,9 +118,18 @@ async def resolve_and_fetch_package_metrics(package_name: str) -> PackageRiskMet
         if not github_repo:
             raise UntrackablePackage(f"Package '{package_name}' exists in registry but has no associated public GitHub repository.")
 
+        # These were previously collapsed into one UntrackablePackage -> HTTP 404.
+        # They are different failures and the response must say which.
         gh_result = await fetch_github_metrics(client, github_repo, since_dt)
-        if not gh_result or gh_result.get("rate_limited"):
-            raise UntrackablePackage(f"GitHub repository '{github_repo}' could not be queried or rate limit depleted.")
+        if gh_result and gh_result.get("rate_limited"):
+            raise UpstreamRateLimited(
+                "GitHub telemetry budget temporarily depleted. Retry shortly; "
+                "this is a service-side limit, not a property of the requested package."
+            )
+        if not gh_result:
+            raise UntrackablePackage(
+                f"GitHub repository '{github_repo}' could not be queried."
+            )
 
         maintainer_count = reg_result.get("maintainer_count")
 

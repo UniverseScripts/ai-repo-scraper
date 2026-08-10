@@ -6,8 +6,10 @@ from db.models import APIKey
 
 async def verify_api_key(x_api_key: str = Header(...)):
     """
-    Dependency to verify API keys via constant-time SHA-256 lookup in PostgreSQL.
-    If the key is inactive or balance is <= 0, strictly terminates the socket.
+    Dependency to verify API keys via SHA-256 digest lookup in PostgreSQL.
+    Rejects unknown keys and keys deactivated by a cancellation webhook.
+    Quota is enforced by the Redis sliding window, not a token balance —
+    token_balance was dropped from api_key in migration b70298e752a9.
     """
     if not x_api_key:
         raise HTTPException(

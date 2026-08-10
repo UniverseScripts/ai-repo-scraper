@@ -1,3 +1,7 @@
+# PHASE 2 ARTIFACT — NOT THE LIVE DEPLOYMENT.
+# Production currently runs on Vercel (static frontend) + Render (Docker API).
+# This manifest is retained for the Phase 2 ($1,000+ MRR) K8s target described in
+# the revenue-triggered scaling matrix. Keep its routes in sync with api/main.py.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -10,7 +14,9 @@ spec:
   rules:
     - http:
         paths:
-          - path: /api/v1/ai-developer-velocity
+          # Covers /api/v1/package-risk/... and /api/v1/analytics/package-risk/...
+          # (Was /api/v1/ai-developer-velocity — a Rev. 1 path that no longer exists.)
+          - path: /api/v1
             pathType: Prefix
             backend:
               service:

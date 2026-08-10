@@ -9,6 +9,10 @@ os.environ["REDIS_URL"] = "redis://mock"
 os.environ["LEMON_SQUEEZY_WEBHOOK_SECRET"] = "mock_secret"
 os.environ["RESEND_API_KEY"] = "mock_resend_key"
 os.environ["LEMON_SQUEEZY_VARIANT_ID"] = "mock_variant_id"
+# Both are enforced by the api.main startup guard; without them the import
+# of api.main below raises RuntimeError and the whole suite fails to collect.
+os.environ["RESEND_FROM_EMAIL"] = "keys@mock-agentrisk.test"
+os.environ["API_KEY_SIGNING_SECRET"] = "mock_signing_secret"
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
@@ -44,6 +48,8 @@ def patch_environment(monkeypatch):
     monkeypatch.setenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "mock_secret")
     monkeypatch.setenv("RESEND_API_KEY", "mock_resend_key")
     monkeypatch.setenv("LEMON_SQUEEZY_VARIANT_ID", "mock_variant_id")
+    monkeypatch.setenv("RESEND_FROM_EMAIL", "keys@mock-agentrisk.test")
+    monkeypatch.setenv("API_KEY_SIGNING_SECRET", "mock_signing_secret")
 
 @pytest.fixture(autouse=True)
 def patch_db_session(monkeypatch, async_session):

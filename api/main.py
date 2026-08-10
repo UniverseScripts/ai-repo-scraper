@@ -8,7 +8,6 @@ import uvicorn
 import os
 import hmac
 import hashlib
-import uuid
 import httpx
 
 from db.connection import AsyncSessionLocal
@@ -17,7 +16,13 @@ from api.schemas import PackageRiskMetricResponse, AdvancedPackageRiskAnalyticsR
 from api.deps import verify_api_key
 from api.rate_limiter import enforce_rate_limit
 from api.analytics import calculate_mci, calculate_dri, calculate_asi
-from api.service import resolve_and_fetch_package_metrics, RegistryNotFound, UntrackablePackage
+from api.service import (
+    resolve_and_fetch_package_metrics,
+    RegistryNotFound,
+    UntrackablePackage,
+    UpstreamAuthUnavailable,
+    UpstreamRateLimited,
+)
 from core.config import settings
 
 # Enforce strict fail-fast perimeter checks on application boot
@@ -27,6 +32,19 @@ if not settings.DATABASE_URL:
     raise RuntimeError("CRITICAL: DATABASE_URL environment variable missing")
 if not settings.REDIS_URL:
     raise RuntimeError("CRITICAL: REDIS_URL environment variable missing")
+if not settings.RESEND_FROM_EMAIL:
+    raise RuntimeError("CRITICAL: RESEND_FROM_EMAIL environment variable missing")
+if not settings.API_KEY_SIGNING_SECRET:
+    raise RuntimeError("CRITICAL: API_KEY_SIGNING_SECRET environment variable missing")
+
+# GITHUB_TOKEN is deliberately NOT fail-fast. The scheduled Actions workflow is
+# the visibility signal for the scraper path, and a hard boot failure here would
+# take the whole API down for a capability that only affects on-demand fetches.
+# Instead the request path surfaces its absence honestly as HTTP 503 — see
+# UpstreamAuthUnavailable in api/service.py.
+if not settings.GITHUB_TOKEN:
+    print("WARNING: GITHUB_TOKEN unset. On-demand live fetch is disabled; "
+          "cache misses will return HTTP 503 until it is configured.")
 
 app = FastAPI(
     title="Data-as-a-Service Core",
@@ -143,6 +161,18 @@ async def get_or_fetch_package_metric(package_name: str, background_tasks: Backg
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
         )
+    # Upstream problems are OUR failure, not evidence about the package. Returning
+    # 404 here would tell a customer their real, trackable package is untrackable.
+    except UpstreamAuthUnavailable as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e)
+        )
+    except UpstreamRateLimited as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e)
+        )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -204,16 +234,34 @@ async def lemon_squeezy_webhook(request: Request):
         if settings.LEMON_SQUEEZY_VARIANT_ID and str(variant_id) != str(settings.LEMON_SQUEEZY_VARIANT_ID):
             return {"status": "Ignored - different product variant"}
 
-        raw_api_key = f"daas_live_{uuid.uuid4().hex}"
+        # Derive the raw key deterministically from the subscription id so a retried
+        # webhook regenerates the IDENTICAL key. Only the SHA-256 digest is ever
+        # persisted, so a randomly generated key could never be re-sent on retry.
+        # (Per-customer rotation would need a salt column; not required today.)
+        raw_api_key = "daas_live_" + hmac.new(
+            settings.API_KEY_SIGNING_SECRET.encode("utf-8"),
+            f"apikey:v1:{subscription_id}".encode("utf-8"),
+            hashlib.sha256
+        ).hexdigest()
         hashed_api_key = hashlib.sha256(raw_api_key.encode("utf-8")).hexdigest()
 
+        # Idempotent provisioning: subscription_id carries a UNIQUE constraint, so a
+        # blind insert would make every retry fail on the constraint instead.
         async with AsyncSessionLocal() as session:
-            new_api_key = APIKey(
-                valid_api_keys=hashed_api_key,
-                subscription_id=str(subscription_id),
-                is_active=True
+            existing_res = await session.execute(
+                select(APIKey).where(APIKey.subscription_id == str(subscription_id))
             )
-            session.add(new_api_key)
+            existing_key = existing_res.scalars().first()
+
+            if existing_key:
+                existing_key.valid_api_keys = hashed_api_key
+                existing_key.is_active = True
+            else:
+                session.add(APIKey(
+                    valid_api_keys=hashed_api_key,
+                    subscription_id=str(subscription_id),
+                    is_active=True
+                ))
             await session.commit()
 
         try:
@@ -225,7 +273,7 @@ async def lemon_squeezy_webhook(request: Request):
                         "Content-Type": "application/json"
                     },
                     json={
-                        "from": "onboarding@yourdomain.com",
+                        "from": settings.RESEND_FROM_EMAIL,
                         "to": [user_email],
                         "subject": "Your Maintainer Risk DaaS API Key",
                         "html": f"<p>Thank you for subscribing. Your API key is: <strong>{raw_api_key}</strong></p>"
@@ -237,6 +285,23 @@ async def lemon_squeezy_webhook(request: Request):
         except Exception as e:
             print(f"CRITICAL ALERT: Failed to dispatch API key email to {user_email}. Error: {e}")
             key_dispatched = False
+
+        # The key row is already committed, so a retry is safe and converges on the
+        # same credential. Returning 2xx here would tell Lemon Squeezy the customer
+        # was served when they in fact received nothing.
+        if not key_dispatched:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="API key persisted but delivery failed; webhook retry expected."
+            )
+
+    elif event_name in ["subscription_payment_success", "subscription_updated"]:
+        # Renewal or resubscribe-after-cancel. Reactivate the existing credential;
+        # do not re-issue or re-send on every successful renewal payment.
+        async with AsyncSessionLocal() as session:
+            stmt = update(APIKey).where(APIKey.subscription_id == str(subscription_id)).values(is_active=True)
+            await session.execute(stmt)
+            await session.commit()
 
     elif event_name in ["subscription_cancelled", "subscription_expired"]:
         async with AsyncSessionLocal() as session:

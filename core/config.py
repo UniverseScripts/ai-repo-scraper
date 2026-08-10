@@ -22,6 +22,21 @@ class Settings(BaseSettings):
     LEMON_SQUEEZY_VARIANT_ID: str = ""
     CACHE_TTL_HOURS: int = 6
 
+    # Sender address for transactional key dispatch. Must be an address on a
+    # Resend-verified domain; Resend rejects unverified senders outright.
+    RESEND_FROM_EMAIL: str = ""
+
+    # Dedicated secret used to derive raw API keys deterministically from the
+    # subscription id, so a retried webhook regenerates the identical key.
+    # Deliberately NOT LEMON_SQUEEZY_WEBHOOK_SECRET — signing material and key
+    # material stay separate.
+    API_KEY_SIGNING_SECRET: str = ""
+
+    # GraphQL budget the scheduled scraper leaves untouched, reserved for
+    # customer-facing on-demand fetches (PROJECT_CONTEXT.pdf: live requests
+    # take priority over background pre-warming).
+    GITHUB_RATELIMIT_RESERVE: int = 1000
+
     model_config = SettingsConfigDict(
         env_file=os.path.join(project_root, ".env") if os.path.exists(os.path.join(project_root, ".env")) else None,
         env_file_encoding="utf-8",

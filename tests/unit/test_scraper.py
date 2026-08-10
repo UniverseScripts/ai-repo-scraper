@@ -30,5 +30,23 @@ async def test_npm_maintainer_count_valid():
     }
 
     result = await fetch_npm_metrics(mock_client, "langchain")
-    
+
     assert result.get("maintainer_count") == 2
+
+@pytest.mark.asyncio
+async def test_npm_maintainer_count_absent_is_none():
+    """
+    Absent maintainer metadata must yield None, not a substituted 1. Substituting 1
+    set single_maintainer_flag and produced a fabricated MCI of 10.0 — maximum risk —
+    out of missing data, which is the exact pattern Section 8 permanently prohibits.
+    """
+    mock_client = AsyncMock()
+    mock_client.get.return_value.status_code = 200
+    mock_client.get.return_value.json = lambda: {
+        "maintainers": [],
+        "time": {}
+    }
+
+    result = await fetch_npm_metrics(mock_client, "ghost-package")
+
+    assert result.get("maintainer_count") is None

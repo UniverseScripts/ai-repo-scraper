@@ -16,16 +16,6 @@ export default function Page() {
     setTimeout(() => setFlash(false), 150);
   };
 
-  const timeSeriesPoints = [
-    { day: "D1", mci: 10.0, asi: 2.1 },
-    { day: "D5", mci: 10.0, asi: 2.3 },
-    { day: "D10", mci: 8.5, asi: 3.1 },
-    { day: "D15", mci: 8.5, asi: 4.8 },
-    { day: "D20", mci: 10.0, asi: 7.2 },
-    { day: "D25", mci: 10.0, asi: 8.0 },
-    { day: "D30", mci: 10.0, asi: 8.0 }
-  ];
-
   return (
     <main className="min-h-screen bg-trueblack text-sterilewhite flex flex-col font-sans uppercase tracking-widest text-sm w-full">
       
@@ -99,10 +89,12 @@ ENCRYPTION: HMAC-SHA256 HMAC VERIFIED`}
           </div>
 
           <div className="border border-zinc-900 p-6 md:p-10 flex flex-col bg-black">
-            <h2 className="text-xl font-bold mb-6 text-zinc-500 border-b border-zinc-900 pb-3 font-mono">RESPONSE PAYLOAD</h2>
+            <h2 className="text-xl font-bold mb-6 text-zinc-500 border-b border-zinc-900 pb-3 font-mono">
+              RESPONSE PAYLOAD <span className="text-amber-400 text-xs">[ILLUSTRATIVE]</span>
+            </h2>
             <pre className="border border-zinc-900 bg-zinc-950 p-6 text-xs md:text-sm overflow-x-auto text-zinc-400 font-mono flex-1 leading-relaxed">
 {`{
-  "package_name": "npm/@modelcontextprotocol/sdk",
+  "package_name": "npm/example-mcp-server",
   "timestamp": "2026-07-27T18:50:00Z",
   "maintainer_concentration_index": 10.0,
   "dormancy_reactivation_index": "insufficient data",
@@ -125,24 +117,29 @@ ENCRYPTION: HMAC-SHA256 HMAC VERIFIED`}
           <h2 className="text-xl font-bold mb-8 text-crtgreen border-b border-zinc-900 pb-3 font-mono">HISTORICAL TELEMETRY &amp; TYPOSQUAT GUARD</h2>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
             
-            <div className="border border-zinc-900 p-6 md:p-8 bg-zinc-950 font-mono text-xs">
-              <p className="text-zinc-500 mb-4 tracking-widest">GET /api/v1/package-risk/{`{package_name}`}/history?limit=30</p>
-              <div className="h-48 flex items-end justify-between gap-3 border-b border-l border-zinc-800 p-4 pt-8 bg-black">
-                {timeSeriesPoints.map((pt, i) => (
-                  <div key={i} className="flex flex-col items-center flex-1 h-full justify-end gap-1">
-                    <div 
-                      className="w-full bg-crtgreen/80 hover:bg-crtgreen transition-all"
-                      style={{ height: `${(pt.asi / 10) * 100}%` }}
-                      title={`ASI: ${pt.asi}`}
-                    />
-                    <span className="text-[10px] text-zinc-600 mt-1">{pt.day}</span>
-                  </div>
-                ))}
+            <div className="border border-zinc-900 p-6 md:p-8 bg-zinc-950 font-mono text-xs flex flex-col justify-between">
+              <div>
+                <p className="text-zinc-500 mb-3 tracking-widest">GET /api/v1/package-risk/{`{package_name}`}/history?limit=30</p>
+                <p className="text-amber-400 mb-3 tracking-widest text-[11px]">[ EXAMPLE RESPONSE SHAPE — NOT LIVE DATA ]</p>
+                <pre className="text-zinc-400 bg-black p-5 border border-zinc-900 overflow-x-auto text-xs leading-relaxed">
+{`[
+  {
+    "package_name": "npm/<name>",
+    "timestamp": "<iso-8601>",
+    "maintainer_concentration_index": <float | "insufficient data">,
+    "dormancy_reactivation_index":    <float | "insufficient data">,
+    "anomalous_spike_index":          <float | "insufficient data">,
+    "maintainer_count": <int | null>,
+    "days_since_last_publish": <int | null>
+  }
+  // newest first, one snapshot per ingest cycle
+]`}
+                </pre>
               </div>
-              <div className="flex justify-between items-center mt-4 text-[11px]">
-                <span className="text-crtgreen font-bold">■ ANOMALOUS SPIKE INDEX (ASI) TREND</span>
-                <span className="text-zinc-500">30-DAY RETENTION</span>
-              </div>
+              <p className="text-zinc-400 text-xs mt-6 leading-relaxed normal-case font-sans">
+                One snapshot is retained per ingest cycle. <code className="text-crtgreen">limit</code> accepts 1&ndash;100 and defaults to 30.
+                Any index whose inputs are unavailable returns <code className="text-crtgreen">&quot;insufficient data&quot;</code> rather than a substituted value.
+              </p>
             </div>
 
             <div className="border border-zinc-900 p-6 md:p-8 bg-zinc-950 font-mono text-xs flex flex-col justify-between">
