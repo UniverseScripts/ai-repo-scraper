@@ -74,10 +74,14 @@ async def discover_target_packages(client: httpx.AsyncClient) -> list[dict]:
             seen_keys.add(key)
             seen_repos.add(repo_key)
             final_targets.append(t)
-            
+
+    # No silent caps: npm's search endpoint hard-caps `size` at 250 per query, so
+    # state what the fan-out actually yielded rather than implying full coverage.
+    print(f"DISCOVERY: {len(targets)} raw npm candidates across {len(queries)} queries "
+          f"-> {len(final_targets)} unique targets after dedup by resolved GitHub repo.")
     return final_targets
 
-async def fetch_github_metrics(client: httpx.AsyncClient, github_repo: str, since_dt: datetime) -> dict | None:
+async def fetch_github_metrics(client: httpx.AsyncClient, github_repo: str, since_dt: datetime, reserve: int = 0) -> dict | None:
     if not github_repo:
         return None
         
@@ -138,9 +142,14 @@ async def fetch_github_metrics(client: httpx.AsyncClient, github_repo: str, sinc
         
         rate_limit = data.get("data", {}).get("rateLimit", {}).get("remaining", 5000)
         if rate_limit < 500:
-            print(f"WARNING: Rate limit extremely low ({rate_limit}). Approaching shadowban margin.")
-            if rate_limit < 100:
-                 return {"rate_limited": True}
+            print(f"WARNING: GitHub GraphQL budget low ({rate_limit} remaining).")
+
+        # `reserve` is the budget this caller must leave untouched. The scheduled
+        # scraper passes a large reserve so customer-facing on-demand fetches retain
+        # headroom; on-demand callers pass 0 and may consume the whole remainder.
+        if rate_limit <= reserve:
+            print(f"BUDGET: GraphQL remaining={rate_limit}, reserve={reserve}. Halting this caller.")
+            return {"rate_limited": True}
 
         repo_data = data.get("data", {}).get("repository", {})
         if not repo_data or not repo_data.get("defaultBranchRef"):
@@ -203,7 +212,10 @@ async def fetch_npm_metrics(client: httpx.AsyncClient, package_name: str) -> dic
         data = response.json()
         
         maintainers = data.get("maintainers", [])
-        maintainer_count = len(maintainers) if maintainers else 1
+        # Absent maintainer metadata is NOT evidence of a single maintainer.
+        # Substituting 1 here produced a fabricated MCI of 10.0 (maximum risk) out of
+        # missing data. None makes calculate_mci return "insufficient data" instead.
+        maintainer_count = len(maintainers) if maintainers else None
         
         time_data = data.get("time", {})
         release_times = []
@@ -293,20 +305,27 @@ async def ingest_metrics():
     }
 
     metrics_payload = []
-    
+    # Leave headroom for customer-facing on-demand fetches, which take priority
+    # over background pre-warming.
+    reserve = settings.GITHUB_RATELIMIT_RESERVE
+    skipped_unqueryable = 0
+    halted_on_budget = False
+
     async with httpx.AsyncClient(headers=headers, timeout=20.0) as client:
         targets = await discover_target_packages(client)
-        
+
         for pkg in targets:
             pkg_name = pkg["name"]
             ecosystem = pkg["ecosystem"]
             github_repo = pkg["github"]
             
-            gh_result = await fetch_github_metrics(client, github_repo, since_dt)
+            gh_result = await fetch_github_metrics(client, github_repo, since_dt, reserve=reserve)
             if not gh_result:
+                skipped_unqueryable += 1
                 continue
             if gh_result.get("rate_limited"):
-                print("ABORTING: GitHub Rate limit depleted. Saving current payload...")
+                halted_on_budget = True
+                print(f"BUDGET HALT: reserve of {reserve} reached. Saving current payload...")
                 break
             gh_result.pop("rate_limited")
             
@@ -334,6 +353,13 @@ async def ingest_metrics():
             
             metrics_payload.append(payload)
             await asyncio.sleep(0.1)
+
+    # No silent caps: report coverage including what was dropped and why, so a
+    # truncated run is never mistaken for full catalog coverage.
+    print(
+        f"INGEST SUMMARY: discovered={len(targets)} ingested={len(metrics_payload)} "
+        f"skipped_unqueryable={skipped_unqueryable} halted_on_budget={halted_on_budget}"
+    )
 
     if not metrics_payload:
         print("No metrics extracted. Exiting.")

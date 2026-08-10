@@ -24,8 +24,14 @@ jobs:
             
             - name: Running The Scrapper
               env:
-                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                    # The Actions-provisioned GITHUB_TOKEN carries a materially smaller
+                    # GraphQL budget than a PAT, and the Rev.3 six-query discovery
+                    # fan-out exhausts it. Requires a GH_PAT repository secret
+                    # (classic PAT; public_repo scope is sufficient).
+                    GITHUB_TOKEN: ${{ secrets.GH_PAT }}
                     DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+                    # Budget left untouched for customer-facing on-demand fetches.
+                    GITHUB_RATELIMIT_RESERVE: "1000"
                     PYTHONPATH: .
               run: |
                   python scraper/github_velocity.py

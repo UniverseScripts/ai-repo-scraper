@@ -15,7 +15,13 @@ services:
         sync: false
       - key: RESEND_API_KEY
         sync: false
+      # Address on a Resend-verified domain. The API refuses to boot without it.
+      - key: RESEND_FROM_EMAIL
+        sync: false
       - key: LEMON_SQUEEZY_WEBHOOK_SECRET
         sync: false
       - key: LEMON_SQUEEZY_VARIANT_ID
+        sync: false
+      # openssl rand -hex 32. The API refuses to boot without it.
+      - key: API_KEY_SIGNING_SECRET
         sync: false
