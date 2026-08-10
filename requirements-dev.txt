@@ -1,0 +1,9 @@
+# Test-only dependencies, kept out of requirements.txt so the production container
+# image does not ship the test harness. Previously these were undeclared entirely,
+# which meant the suite could only run on a machine that happened to have them.
+-r requirements.txt
+
+aiosqlite==0.22.1
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
