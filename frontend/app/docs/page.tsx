@@ -173,7 +173,7 @@ axios.get(\`https://agentrisk-daas.onrender.com/api/v1/analytics/package-risk/\$
                 <span className="text-zinc-500 text-xs">TIME-SERIES RETENTION</span>
               </div>
               <p className="text-zinc-400 text-sm lowercase normal-case tracking-normal font-sans mb-4">
-                Returns up to 100 historical telemetry snapshots and computed indices for trend analysis over a 30-day window.
+                Returns historical telemetry snapshots and computed indices, newest first. <code className="text-crtgreen font-mono bg-zinc-950 px-2 py-1">limit</code> accepts 1&ndash;100 and defaults to 30. One snapshot is retained per ingest cycle.
               </p>
             </div>
 
@@ -223,6 +223,13 @@ axios.get(\`https://agentrisk-daas.onrender.com/api/v1/analytics/package-risk/\$
               <p className="text-cyan-400 font-bold mb-2">HTTP 504 GATEWAY TIMEOUT</p>
               <p className="text-zinc-400 lowercase normal-case tracking-normal font-sans text-xs mb-3">
                 Synchronous live resolution exceeded 5.0s threshold. Resolution offloaded to background revalidation task.
+              </p>
+            </div>
+
+            <div className="border border-zinc-900 p-6 bg-zinc-950">
+              <p className="text-orange-400 font-bold mb-2">HTTP 503 SERVICE UNAVAILABLE</p>
+              <p className="text-zinc-400 lowercase normal-case tracking-normal font-sans text-xs mb-3">
+                An upstream telemetry source was unreachable or its request budget was momentarily exhausted. This describes our service, never the queried package &mdash; a package is only reported untrackable when that is actually true.
               </p>
             </div>
           </div>
