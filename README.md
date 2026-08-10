@@ -31,7 +31,7 @@ AgentRisk DaaS synthesizes raw temporal signals into three institutional composi
 
 | Index | Name | Formula / Derivation | Fallback Behavior |
 | :--- | :--- | :--- | :--- |
-| **MCI** | **Maintainer Concentration Index** | Evaluates maintainer count and author churn (`1.0 - unique_authors/total_commits`). Yields `10.0` for single-maintainer packages. | Returns `"insufficient data"` if maintainer count is `null` (e.g. PyPI packages where maintainer metadata is unverified). |
+| **MCI** | **Maintainer Concentration Index** | Evaluates maintainer count and author churn (`1.0 - unique_authors/total_commits`). Yields `10.0` for single-maintainer packages. | Returns `"insufficient data"` if maintainer count is `null` — PyPI packages, where maintainer metadata is unverified, and any npm package whose registry record carries no maintainer array. Absent metadata is never substituted with a count of 1. |
 | **DRI** | **Dormancy Reactivation Index** | Evaluates days since last publish vs historical publish cadence variance to detect unexpected reactivation after long quiet periods. | Returns `"insufficient data"` if `days_since_last_publish` or `publish_cadence_variance` is undefined ($n \le 1$ publish). |
 | **ASI** | **Anomalous Spike Index** | Evaluates daily fork velocity relative to 30-day historical averages (`fork_spike_ratio`) combined with open issue deltas. | Returns `"insufficient data"` if `fork_spike_ratio` is `null`. |
 
@@ -50,14 +50,14 @@ curl -X GET "https://agentrisk-daas.onrender.com/"
 
 ### 2. Advanced Risk Analytics
 ```bash
-curl -X GET "https://agentrisk-daas.onrender.com/api/v1/analytics/package-risk/npm/react" \
+curl -X GET "https://agentrisk-daas.onrender.com/api/v1/analytics/package-risk/npm/example-mcp-server" \
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-**Response Payload:**
+**Response Payload** — *illustrative. These values show field shapes and types; they are not a recorded response for any specific package.*
 ```json
 {
-  "package_name": "npm/react",
+  "package_name": "npm/example-mcp-server",
   "timestamp": "2026-07-27T00:00:00Z",
   "maintainer_concentration_index": 10.0,
   "dormancy_reactivation_index": "insufficient data",
@@ -75,7 +75,9 @@ curl -X GET "https://agentrisk-daas.onrender.com/api/v1/analytics/package-risk/n
 POST /webhooks/lemon-squeezy
 ```
 - **HMAC-SHA256**: Validates request signatures via `X-Signature`.
-- **`subscription_created`**: Generates a SHA-256 hashed API key, stores `subscription_id`, and dispatches the raw key via Resend transactional email.
+- **`subscription_created`**: Derives the raw key deterministically from `subscription_id`, persists its SHA-256 digest, and dispatches the raw key via Resend transactional email. Deterministic derivation makes webhook retries idempotent — a retry regenerates the identical key rather than minting a duplicate.
+- **Delivery is enforced, not best-effort**: if the dispatch fails the endpoint returns HTTP 500 so Lemon Squeezy retries. A 2xx from this endpoint means the subscriber actually received their key.
+- **`subscription_payment_success` / `subscription_updated`**: Reactivates the existing key without re-issuing it.
 - **`subscription_cancelled` / `subscription_expired`**: Deactivates the API key (`is_active = False`) to prevent revenue leakage.
 
 ---
@@ -105,6 +107,9 @@ POST /webhooks/lemon-squeezy
 
 Run full unit, integration, and E2E test suite locally:
 ```bash
-uv run pytest
+pip install -r requirements-dev.txt
+PYTHONPATH=. pytest
 ```
-*Current Coverage*: **18/18 tests passing cleanly (100% pass rate).**
+The suite also runs on every push and pull request via `.github/workflows/test.yaml`. It needs no secrets — `tests/conftest.py` supplies every required environment variable and no live service is contacted.
+
+*Current Coverage*: **30/30 tests passing.**
