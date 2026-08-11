@@ -145,12 +145,13 @@ ENCRYPTION: HMAC-SHA256 HMAC VERIFIED`}
             <div className="border border-zinc-900 p-6 md:p-8 bg-zinc-950 font-mono text-xs flex flex-col justify-between">
               <div>
                 <p className="text-zinc-500 mb-3 tracking-widest">SLOPSQUATTING / TYPOSQUAT DETECTOR</p>
+                <p className="text-amber-400 mb-3 tracking-widest text-[11px]">[ LIVE RESPONSE — REPRODUCIBLE WITH AN ACTIVE KEY ]</p>
                 <pre className="text-amber-400 bg-black p-5 border border-zinc-900 overflow-x-auto text-xs leading-relaxed">
 {`{
-  "detail": "Package identity 'npm/reaact' does not exist in registry.",
+  "detail": "Package identity 'npm/xios' does not exist in registry.",
   "status": "not_found",
-  "possible_typosquat_of": "npm/react",
-  "similarity": 0.91
+  "possible_typosquat_of": "npm/axios",
+  "similarity": 0.889
 }`}
                 </pre>
               </div>
