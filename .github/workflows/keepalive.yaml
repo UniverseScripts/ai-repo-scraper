@@ -1,0 +1,96 @@
+name: Keep-Warm
+
+# Pings the Render health endpoint often enough that the free-tier instance never
+# spins down, so a visitor (or a store reviewer) never eats the ~33s cold start.
+#
+# WHY EVERY 10 MINUTES, NOT FASTER:
+#   - Render free tier spins down after 15 minutes with no inbound request. Ten
+#     minutes clears that with margin.
+#   - GitHub's cron minimum is 5 minutes, and scheduled runs are best-effort: they
+#     are routinely delayed by 5-20 minutes at peak, and dropped entirely under
+#     heavy load. A tighter interval buys nothing it can actually deliver.
+#   - Pinging harder does not make the instance "more awake". Warm is warm.
+#
+# WHAT THIS COSTS (read before leaving it on):
+#   Render's free tier allows 750 instance-hours per month, per account. Keeping one
+#   service warm around the clock burns ~730 of them. That is nearly the entire
+#   allowance, and it leaves no room for a second free service. With spin-down left
+#   alone, this project uses a small fraction of that.
+#   Trade-off: ~730 h/month of the free budget to remove a ~33s first-request delay.
+#   Enable it while it matters; disable it when it does not. See the note at the end.
+#
+# This also doubles as free uptime monitoring: a failed run emails the repo owner.
+
+on:
+    schedule:
+        - cron: '*/10 * * * *'
+    workflow_dispatch:
+
+# Never let a slow run stack up behind the next scheduled one.
+concurrency:
+    group: keepalive
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    ping:
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            - name: Ping health endpoint
+              env:
+                  # Public health URL — no credential involved, nothing to hide.
+                  TARGET: https://agentrisk-daas.onrender.com/
+              run: |
+                  set -uo pipefail
+
+                  for attempt in 1 2 3; do
+                    # --max-time 90 so a genuine cold start is absorbed rather than
+                    # reported as an outage.
+                    read -r code seconds <<< "$(
+                      curl -sS -o /tmp/body.json \
+                           -w '%{http_code} %{time_total}' \
+                           --max-time 90 \
+                           "$TARGET" 2>/tmp/err.txt || echo '000 0'
+                    )"
+
+                    if [ "$code" = "200" ]; then
+                      echo "OK  HTTP $code in ${seconds}s"
+                      echo "body: $(cat /tmp/body.json)"
+
+                      # A warm instance answers in well under a second. Anything
+                      # slower means the schedule slipped and it had gone cold —
+                      # worth seeing in the log rather than silently succeeding.
+                      if [ "${seconds%%.*}" -ge 5 ]; then
+                        echo "::warning::Responded in ${seconds}s — the instance had gone cold. Scheduled runs are being delayed."
+                      fi
+                      exit 0
+                    fi
+
+                    echo "attempt $attempt/3: HTTP $code after ${seconds}s"
+                    [ -s /tmp/err.txt ] && sed 's/^/  curl: /' /tmp/err.txt
+                    [ "$attempt" -lt 3 ] && sleep 15
+                  done
+
+                  echo "::error::Health endpoint did not return 200 after 3 attempts."
+                  exit 1
+
+# ---------------------------------------------------------------------------
+# TURNING IT DOWN
+#
+# To stop entirely: delete this file, or Actions tab -> Keep-Warm -> "..." ->
+# Disable workflow. Deleting is cleaner; disabling is reversible in one click.
+#
+# To keep it warm only during waking hours (cuts the Render cost by roughly two
+# thirds), replace the cron above with:
+#
+#     - cron: '*/10 6-23 * * *'    # 06:00-23:59 UTC only
+#
+# Note that GitHub cron is always UTC and ignores the repository's timezone.
+#
+# GitHub also disables scheduled workflows in a repository with no commit activity
+# for 60 days, and emails the owner when it does. If the service starts going cold
+# again for no obvious reason, check that first.
+# ---------------------------------------------------------------------------
